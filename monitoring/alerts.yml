@@ -1,0 +1,50 @@
+# Prometheus Alerting Rules
+# Defines when to fire alerts based on metrics
+
+groups:
+  - name: model_performance
+    interval: 30s
+    rules:
+      # Alert if prediction latency > 100ms for 5 minutes
+      - alert: HighPredictionLatency
+        expr: fraud_prediction_latency_seconds{quantile="0.95"} > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prediction latency above 100ms"
+          description: "95th percentile latency is {{ $value }}s on {{ $labels.model_version }}"
+
+      # Alert if fraud rate suddenly spikes (data drift indicator)
+      - alert: FraudRateSpike
+        expr: fraud_detection_rate > 0.10
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Fraud rate spike detected"
+          description: "Fraud rate is {{ $value }} on {{ $labels.model_version }} (normal: 2%)"
+
+      # Alert if no predictions in last 5 minutes (service down)
+      - alert: NoPredictions
+        expr: rate(fraud_predictions_total[5m]) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No predictions being made"
+          description: "API may be down or not receiving traffic"
+
+      # Alert if A/B test shows significant performance difference
+      - alert: ABTestSignificantDifference
+        expr: |
+          abs(
+            fraud_detection_rate{model_version="model_a"} -
+            fraud_detection_rate{model_version="model_b"}
+          ) > 0.05
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "A/B test showing significant difference"
+          description: "Model A and B fraud rates differ by >5% — investigate"

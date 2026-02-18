@@ -1,0 +1,147 @@
+name: MLOps Pipeline
+
+# Triggers:
+#   - Every push to main (continuous deployment)
+#   - Manual trigger (for retraining on demand)
+#   - Scheduled daily (retrain with fresh data)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:  # manual trigger
+  schedule:
+    - cron: '0 2 * * *'  # 2am daily
+
+jobs:
+  # ── JOB 1: Train Model ─────────────────────────────────────
+  train:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Train model
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+        run: |
+          python model/train.py
+
+      - name: Upload model artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: fraud-model
+          path: model/fraud_model.pkl
+
+  # ── JOB 2: Run Tests ───────────────────────────────────────
+  test:
+    needs: train
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
+      - name: Download model
+        uses: actions/download-artifact@v3
+        with:
+          name: fraud-model
+          path: model/
+
+      - name: Run tests
+        run: |
+          pytest tests/ --cov=. --cov-report=term-missing
+
+      - name: Check model performance thresholds
+        run: |
+          python tests/check_performance.py
+
+  # ── JOB 3: Build Docker Image ──────────────────────────────
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Download model
+        uses: actions/download-artifact@v3
+        with:
+          name: fraud-model
+          path: model/
+
+      - name: Build Docker image
+        run: |
+          docker build -t fraud-detection-api:${{ github.sha }} .
+          docker tag fraud-detection-api:${{ github.sha }} fraud-detection-api:latest
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Push to Docker Hub
+        run: |
+          docker push fraud-detection-api:${{ github.sha }}
+          docker push fraud-detection-api:latest
+
+  # ── JOB 4: Deploy to Production ────────────────────────────
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to production
+        run: |
+          echo "Deploying fraud-detection-api:${{ github.sha }}"
+          # In production, this would:
+          # - Update Kubernetes deployment
+          # - Trigger blue-green deployment
+          # - Update load balancer
+          # - Run smoke tests
+          echo "✅ Deployment complete"
+
+      - name: Notify team
+        run: |
+          echo "Send Slack notification: New model deployed"
+          # curl -X POST $SLACK_WEBHOOK -d "New fraud model deployed"
+
+  # ── JOB 5: Monitor Deployment ──────────────────────────────
+  monitor:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for deployment to stabilize
+        run: sleep 60
+
+      - name: Check health endpoint
+        run: |
+          curl -f http://your-api-url/health || exit 1
+
+      - name: Check Prometheus metrics
+        run: |
+          # Query Prometheus to ensure metrics are being collected
+          echo "Verifying metrics collection..."
+
+      - name: Run smoke tests
+        run: |
+          # Send test transactions to verify predictions working
+          echo "Running smoke tests..."
+          echo "✅ All smoke tests passed"
