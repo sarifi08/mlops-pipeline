@@ -1,0 +1,21 @@
+# Development dependencies (not needed in production)
+
+# Linting & formatting
+ruff>=0.2.0
+mypy>=1.8.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+locust>=2.20.0
+
+# Pre-commit hooks
+pre-commit>=3.6.0
+
+# Type stubs
+pandas-stubs>=2.1.0
+types-requests>=2.31.0
+
+# Security scanning
+bandit>=1.7.0
+safety>=2.3.0

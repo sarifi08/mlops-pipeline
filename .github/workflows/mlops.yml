@@ -2,90 +2,132 @@ name: MLOps Pipeline
 
 # Triggers:
 #   - Every push to main (continuous deployment)
+#   - Pull requests (CI only — no deploy)
 #   - Manual trigger (for retraining on demand)
-#   - Scheduled daily (retrain with fresh data)
+#   - Scheduled weekly (retrain with fresh data)
 
 on:
   push:
     branches: [ main ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:  # manual trigger
   schedule:
-    - cron: '0 2 * * *'  # 2am daily
+    - cron: '0 2 * * 1'  # Every Monday at 2am
+
+env:
+  PYTHON_VERSION: '3.10'
 
 jobs:
-  # ── JOB 1: Train Model ─────────────────────────────────────
-  train:
+  # ── JOB 1: Code Quality ────────────────────────────────────
+  lint:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install dependencies
         run: |
+          pip install ruff mypy bandit
           pip install -r requirements.txt
+
+      - name: Run Ruff linter
+        run: ruff check .
+
+      - name: Run Ruff formatter check
+        run: ruff format --check .
+
+      - name: Run security scan (Bandit)
+        run: bandit -r api/ model/ config/ monitoring/ --skip B101,B311 -q
+
+  # ── JOB 2: Train Model ─────────────────────────────────────
+  train:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
       - name: Train model
         env:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
-        run: |
-          python model/train.py
+        run: python model/train.py
 
       - name: Upload model artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: fraud-model
           path: model/fraud_model.pkl
 
-  # ── JOB 2: Run Tests ───────────────────────────────────────
+  # ── JOB 3: Run Tests ───────────────────────────────────────
   test:
     needs: train
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install pytest pytest-cov
+          pip install -r requirements-dev.txt
 
       - name: Download model
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: fraud-model
           path: model/
 
-      - name: Run tests
-        run: |
-          pytest tests/ --cov=. --cov-report=term-missing
+      - name: Run tests with coverage
+        run: pytest tests/ --cov=. --cov-report=term-missing --cov-report=xml
 
       - name: Check model performance thresholds
-        run: |
-          python tests/check_performance.py
+        run: python tests/check_performance.py
 
-  # ── JOB 3: Build Docker Image ──────────────────────────────
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  # ── JOB 4: Build Docker Image ──────────────────────────────
   build:
     needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Download model
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: fraud-model
           path: model/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Build Docker image
         run: |
@@ -93,20 +135,24 @@ jobs:
           docker tag fraud-detection-api:${{ github.sha }} fraud-detection-api:latest
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v2
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Push to Docker Hub
+        if: github.event_name != 'pull_request'
         run: |
           docker push fraud-detection-api:${{ github.sha }}
           docker push fraud-detection-api:latest
 
-  # ── JOB 4: Deploy to Production ────────────────────────────
+  # ── JOB 5: Deploy to Production ────────────────────────────
   deploy:
     needs: build
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # environment: production  # Uncomment after creating this environment in GitHub repo Settings → Environments
     steps:
       - name: Deploy to production
         run: |
@@ -121,9 +167,9 @@ jobs:
       - name: Notify team
         run: |
           echo "Send Slack notification: New model deployed"
-          # curl -X POST $SLACK_WEBHOOK -d "New fraud model deployed"
+          # curl -X POST $SLACK_WEBHOOK -d '{"text": "🚀 New fraud model deployed (${{ github.sha }})"}'
 
-  # ── JOB 5: Monitor Deployment ──────────────────────────────
+  # ── JOB 6: Monitor Deployment ──────────────────────────────
   monitor:
     needs: deploy
     runs-on: ubuntu-latest
@@ -133,12 +179,14 @@ jobs:
 
       - name: Check health endpoint
         run: |
-          curl -f http://your-api-url/health || exit 1
+          # TODO: Replace with your actual deployment URL
+          # curl -f http://your-api-url/health || exit 1
+          echo "⚠️  Skipping health check — no deployment URL configured yet"
 
-      - name: Check Prometheus metrics
+      - name: Check for data drift
         run: |
-          # Query Prometheus to ensure metrics are being collected
-          echo "Verifying metrics collection..."
+          # curl -f http://your-api-url/drift
+          echo "Checking for data drift..."
 
       - name: Run smoke tests
         run: |
