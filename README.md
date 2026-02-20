@@ -304,25 +304,6 @@ THRESHOLDS = {
     "roc_auc": 0.85,
 }
 ```
-
-## 🎯 What Interviewers Look For
-
-This project demonstrates you understand:
-
-1. **CI/CD for ML** — not just DevOps, but ML-specific challenges
-2. **A/B testing** — how to validate models in production
-3. **Monitoring** — what to track and when to alert
-4. **Performance gates** — preventing bad models from deploying
-5. **Production readiness** — latency requirements, error handling
-
-## 🚨 Common Pitfalls Avoided
-
-❌ Training in production → ✅ Train in CI/CD, deploy artifact
-❌ No performance gates → ✅ Automated threshold checks
-❌ Random A/B split → ✅ User-based consistent assignment
-❌ No monitoring → ✅ Prometheus + alerts
-❌ Manual deployment → ✅ Fully automated pipeline
-
 ## 📚 Further Reading
 
 - [MLOps Principles](https://ml-ops.org/)
